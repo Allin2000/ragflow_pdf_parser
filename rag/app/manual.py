@@ -6,6 +6,16 @@ from rag.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bull
 from deepdoc.parser import PdfParser, PlainParser
 from rag.utils import num_tokens_from_string
 
+from fastapi import FastAPI, File, UploadFile, Form, APIRouter
+from fastapi.responses import JSONResponse,Response
+from pydantic import BaseModel
+from typing import Optional
+import uvicorn
+
+from PIL import Image
+from io import BytesIO
+import base64
+
 
 class Pdf(PdfParser):
     def __init__(self):
@@ -140,12 +150,51 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     return res
 
 
-if __name__ == "__main__":
-    import sys
+# if __name__ == "__main__":
+#     import sys
 
 
-    def dummy(prog=None, msg=""):
-        pass
+#     def dummy(prog=None, msg=""):
+#         pass
 
 
-    chunk(sys.argv[1], callback=dummy)
+#     chunk(sys.argv[1], callback=dummy)
+
+
+def encode_image(image):
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return img_str
+
+
+router = APIRouter()
+
+class ChunkRequest(BaseModel):
+    filename: str
+    from_page: Optional[int] = 0
+    to_page: Optional[int] = 100000
+    lang: Optional[str] = "Chinese"
+    parser_config: Optional[dict] = {}
+
+@router.post("/chunk_manual")
+async def chunk_endpoint(file: UploadFile = File(...), from_page: int = Form(0), to_page: int = Form(100000), lang: str = Form("Chinese")):
+    filename = file.filename
+    binary = await file.read()
+
+    def callback(prog=None, msg=None):
+        print(f"Progress: {prog}, Message: {msg}")
+
+    result = chunk(filename, binary, from_page, to_page, lang, callback=callback)
+
+    print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+
+    for i in result:
+        print(i)
+
+    for item in result:
+        if 'image' in item:
+            item['image'] = encode_image(item['image'])
+
+    return JSONResponse(content={"result":result})
+

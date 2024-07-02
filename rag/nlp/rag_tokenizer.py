@@ -12,6 +12,7 @@ from huggingface_hub import snapshot_download
 from nltk import word_tokenize
 from nltk.stem import PorterStemmer, WordNetLemmatizer
 from api.utils.file_utils import get_project_base_directory
+import nltk
 
 
 class RagTokenizer:
@@ -42,6 +43,9 @@ class RagTokenizer:
             print("[HUQIE]:Faild to build trie, ", fnm, e, file=sys.stderr)
 
     def __init__(self, debug=False):
+        # 下载所需的 nltk 数据
+        nltk.download('wordnet')
+        nltk.download('punkt')
         self.DEBUG = debug
         self.DENOMINATOR = 1000000
         self.trie_ = datrie.Trie(string.printable)
@@ -59,6 +63,8 @@ class RagTokenizer:
             self.trie_ = datrie.Trie(string.printable)
 
         self.loadDict_(self.DIR_ + ".txt")
+
+
 
     def loadUserDict(self, fnm):
         try:

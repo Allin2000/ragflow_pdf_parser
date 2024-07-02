@@ -1,15 +1,3 @@
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
 import copy
 import re
 from io import BytesIO
@@ -20,6 +8,16 @@ from rag.nlp import tokenize, is_english
 from rag.nlp import rag_tokenizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
 from PyPDF2 import PdfReader as pdf2_read
+
+from fastapi import FastAPI, File, UploadFile, Form, APIRouter
+from fastapi.responses import JSONResponse,Response
+from pydantic import BaseModel
+from typing import Optional
+import uvicorn
+
+from PIL import Image
+from io import BytesIO
+import base64
 
 
 class Ppt(PptParser):
@@ -135,9 +133,49 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         "file type not supported yet(pptx, pdf supported)")
 
 
-if __name__ == "__main__":
-    import sys
+# if __name__ == "__main__":
+#     import sys
 
-    def dummy(a, b):
-        pass
-    chunk(sys.argv[1], callback=dummy)
+#     def dummy(a, b):
+#         pass
+#     chunk(sys.argv[1], callback=dummy)
+
+def encode_image(image):
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return img_str
+
+
+router = APIRouter()
+
+class ChunkRequest(BaseModel):
+    filename: str
+    from_page: Optional[int] = 0
+    to_page: Optional[int] = 100000
+    lang: Optional[str] = "Chinese"
+    parser_config: Optional[dict] = {}
+
+@router.post("/chunk_presentation")
+async def chunk_endpoint(file: UploadFile = File(...), from_page: int = Form(0), to_page: int = Form(100000), lang: str = Form("Chinese")):
+    filename = file.filename
+    binary = await file.read()
+
+    def callback(prog=None, msg=None):
+        print(f"Progress: {prog}, Message: {msg}")
+
+    result = chunk(filename, binary, from_page, to_page, lang, callback=callback)
+
+    print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+
+    for i in result:
+        print(i)
+
+    for item in result:
+        if 'image' in item:
+            item['image'] = encode_image(item['image'])
+
+    return JSONResponse(content={"result":result})
+
+
+
