@@ -3,13 +3,14 @@ import re
 from collections import Counter
 
 from api.db import ParserType
-from rag.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks
+from rag.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, \
+    tokenize_chunks
 from deepdoc.parser import PdfParser, PlainParser
 import numpy as np
 from rag.utils import num_tokens_from_string
 
 from fastapi import FastAPI, File, UploadFile, Form, APIRouter
-from fastapi.responses import JSONResponse,Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -18,11 +19,131 @@ from PIL import Image
 from io import BytesIO
 import base64
 
+import pandas as pd
+from collections import defaultdict
+
 
 class Pdf(PdfParser):
     def __init__(self):
         self.model_speciess = ParserType.PAPER.value
         super().__init__()
+        # self.all_boxes = []  
+
+    @staticmethod
+    def sort_X_by_page(arr, threashold):
+        # sort using y1 first and then x1
+        arr = sorted(arr, key=lambda r: (r["page_number"], r["x0"], r["top"]))
+        for i in range(len(arr) - 1):
+            for j in range(i, -1, -1):
+                # restore the order using th
+                if abs(arr[j + 1]["x0"] - arr[j]["x0"]) < threashold \
+                        and arr[j + 1]["top"] < arr[j]["top"] \
+                        and arr[j + 1]["page_number"] == arr[j]["page_number"]:
+                    tmp = arr[j]
+                    arr[j] = arr[j + 1]
+                    arr[j + 1] = tmp
+        return arr
+
+    # @staticmethod
+    # def process_pdf_data(pdf_data):
+    #     page_groups = defaultdict(list)
+    #     for item in pdf_data:
+    #         page_groups[item['page_number']].append(item)
+
+    #     for page, items in page_groups.items():
+    #         x0_groups = defaultdict(list)
+    #         for item in items:
+    #             x0_group_key = item['x0'] // 10
+    #             x0_groups[x0_group_key].append(item)
+
+    #         for x0_key, x0_items in x0_groups.items():
+    #             x0_items.sort(key=lambda x: x['top'])
+
+    #         page_groups[page] = x0_groups
+
+    #     result = []
+    #     for page, x0_groups in page_groups.items():
+    #         for x0_key, items in x0_groups.items():
+    #             result.extend(items)
+
+    #     return result
+
+    # def sort_boxes(self):
+    #     page_groups = defaultdict(list)
+    #     for item in self.boxes:
+    #         page_groups[item['page_number']].append(item)
+
+    #     for page, items in page_groups.items():
+    #         x0_groups = defaultdict(list)
+    #         for item in items:
+    #             x0_group_key = item['x0'] // 10
+    #             x0_groups[x0_group_key].append(item)
+
+    #         for x0_key, x0_items in x0_groups.items():
+    #             x0_items.sort(key=lambda x: x['top'])
+
+    #         page_groups[page] = x0_groups
+
+    #     sorted_boxes = []
+    #     for page, x0_groups in page_groups.items():
+    #         for x0_key, items in x0_groups.items():
+    #             sorted_boxes.extend(items)
+
+    #     self.boxes = sorted_boxes
+
+    def sort_boxes(self):
+        page_groups = defaultdict(list)
+        for item in self.boxes:
+            page_groups[item['page_number']].append(item)
+
+        sorted_boxes = []
+
+        for page, items in page_groups.items():
+            if page == 1:
+                pre_keyword_boxes = []
+                post_keyword_boxes = []
+                keyword_found = False
+
+                for item in items:
+                    if not keyword_found:
+                        if item['text'].strip().lower().startswith(("关键词", "keywords")):
+                            keyword_found = True
+                            pre_keyword_boxes.append(item)
+                        else:
+                            pre_keyword_boxes.append(item)
+                    else:
+                        post_keyword_boxes.append(item)
+
+                pre_keyword_boxes.sort(key=lambda x: x['top'])
+
+                x0_groups = defaultdict(list)
+                for item in post_keyword_boxes:
+                    x0_group_key = item['x0'] // 10
+                    x0_groups[x0_group_key].append(item)
+
+                for x0_key, x0_items in x0_groups.items():
+                    x0_items.sort(key=lambda x: x['top'])
+
+                sorted_boxes.extend(pre_keyword_boxes)
+                for x0_key, items in x0_groups.items():
+                    sorted_boxes.extend(items)
+            else:
+                x0_groups = defaultdict(list)
+                for item in items:
+                    x0_group_key = item['x0'] // 10
+                    x0_groups[x0_group_key].append(item)
+
+                for x0_key, x0_items in x0_groups.items():
+                    x0_items.sort(key=lambda x: x['top'])
+
+                for x0_key, items in x0_groups.items():
+                    sorted_boxes.extend(items)
+
+        self.boxes = sorted_boxes
+
+    # def save_boxes_to_csv(self, file_name):
+    #     df = pd.DataFrame(self.boxes)
+    #     df.to_csv(file_name, index=False)
 
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
@@ -45,9 +166,19 @@ class Pdf(PdfParser):
         callback(0.68, "Table analysis finished")
         self._text_merge()
         tbls = self._extract_table_figure(True, zoomin, True, True)
+
+        # self.all_boxes += self.boxes
+
+        # self.save_boxes_to_csv('boxes.csv')
+        # self.all_boxes = self.all_boxes[0:100]
+        # for i in self.all_boxes:
+        #     print(i)
+
+        # print("tttttttttttttttttttttttttttttt")
+
         column_width = np.median([b["x1"] - b["x0"] for b in self.boxes])
         self._concat_downward()
-        self._filter_forpages()
+        # self._filter_forpages()
         callback(0.75, "Text merging finished.")
 
         # clean mess
@@ -55,6 +186,22 @@ class Pdf(PdfParser):
             print("two_column...................", column_width,
                   self.page_images[0].size[0] / zoomin / 2)
             self.boxes = self.sort_X_by_page(self.boxes, column_width / 2)
+
+        # self.all_boxes += self.boxes
+
+        # Sort the boxes by columns
+        # self.all_boxes = self.process_pdf_data(self.all_boxes)
+
+        self.sort_boxes()
+
+        # self.save_boxes_to_csv('boxes.csv')
+        
+        # self.all_boxes = self.all_boxes[0:100]
+        # for i in self.all_boxes:
+        #     print(i)
+
+        # print("tttttttttttttttttttttttttttttt")
+
         for b in self.boxes:
             b["text"] = re.sub(r"([\t 　]|\u3000){2,}", " ", b["text"].strip())
 
@@ -76,7 +223,7 @@ class Pdf(PdfParser):
         title = ""
         authors = []
         i = 0
-        while i < min(32, len(self.boxes)-1):
+        while i < min(32, len(self.boxes) - 1):
             b = self.boxes[i]
             i += 1
             if b.get("layoutno", "").find("title") >= 0:
@@ -175,6 +322,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     sorted_sections = paper["sections"]
     # set pivot using the most frequent type of title,
     # then merge between 2 pivot
+    # for i in sorted_sections:
+    #     print(i)
+    # print("&&&&&&&&&&&&&&&")
     bull = bullets_category([txt for txt, _ in sorted_sections])
     most_level, levels = title_frequency(bull, sorted_sections)
     assert len(sorted_sections) == len(levels)
@@ -277,6 +427,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     return res
 """
 
+
 # if __name__ == "__main__":
 #     import sys
 
@@ -294,6 +445,7 @@ def encode_image(image):
 
 router = APIRouter()
 
+
 class ChunkRequest(BaseModel):
     filename: str
     from_page: Optional[int] = 0
@@ -301,8 +453,10 @@ class ChunkRequest(BaseModel):
     lang: Optional[str] = "Chinese"
     parser_config: Optional[dict] = {}
 
+
 @router.post("/chunk_paper")
-async def chunk_endpoint(file: UploadFile = File(...), from_page: int = Form(0), to_page: int = Form(100000), lang: str = Form("Chinese")):
+async def chunk_endpoint(file: UploadFile = File(...), from_page: int = Form(0), to_page: int = Form(100000),
+                         lang: str = Form("Chinese")):
     filename = file.filename
     binary = await file.read()
 
@@ -311,13 +465,13 @@ async def chunk_endpoint(file: UploadFile = File(...), from_page: int = Form(0),
 
     result = chunk(filename, binary, from_page, to_page, lang, callback=callback)
 
-    print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+    # print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
 
-    for i in result:
-        print(i)
+    # for i in result:
+    #     print(i)
 
     for item in result:
         if 'image' in item:
             item['image'] = encode_image(item['image'])
 
-    return JSONResponse(content={"result":result})
+    return JSONResponse(content={"result": result})
